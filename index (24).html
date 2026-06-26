@@ -1,0 +1,833 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Pipeline Database</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css"/>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet.draw/1.0.4/leaflet.draw.min.css"/>
+<style>
+:root {
+  --bg: #f0f2f0; --surface: #ffffff; --surface-2: #f7f8f7;
+  --border: #d1d5d1; --border-strong: #adb5ad;
+  --text: #1a1f1a; --text-muted: #5a6a5a;
+  --accent: #1d6fa4; --accent-bg: #e6f1fb; --accent-border: #85b7eb;
+  --success: #3b6d11; --success-bg: #eaf3de;
+  --warning: #ba7517; --warning-bg: #faeeda;
+  --danger: #a32d2d; --danger-bg: #fcebeb;
+  --radius: 8px; --font: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --font-mono: 'SF Mono','Consolas',monospace;
+}
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html, body { height: 100%; overflow: hidden; font-family: var(--font); color: var(--text); font-size: 15px; }
+
+/* ── layout ── */
+#app { display: flex; flex-direction: column; height: 100vh; }
+header {
+  background: var(--surface); border-bottom: 1px solid var(--border);
+  padding: 0 1.25rem; display: flex; align-items: center; gap: 1rem;
+  height: 52px; flex-shrink: 0; z-index: 600; position: relative;
+}
+.logo { display: flex; align-items: center; gap: 8px; font-size: 15px; font-weight: 500; }
+.logo svg { color: var(--accent); }
+.client-badge { font-size: 12px; background: var(--accent-bg); color: var(--accent); border: 0.5px solid var(--accent-border); border-radius: 20px; padding: 2px 10px; font-weight: 500; }
+.header-right { margin-left: auto; display: flex; gap: 6px; align-items: center; }
+
+nav { background: var(--surface); border-bottom: 1px solid var(--border); padding: 0 1.25rem; display: flex; flex-shrink: 0; z-index: 600; position: relative; }
+.nav-tab { padding: 8px 16px; font-size: 14px; cursor: pointer; border: none; background: none; color: var(--text-muted); font-family: var(--font); border-bottom: 2px solid transparent; display: flex; align-items: center; gap: 6px; transition: color 0.15s, border-color 0.15s; }
+.nav-tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+.nav-tab:hover:not(.active) { color: var(--text); }
+.count-pill { background: var(--surface-2); border: 0.5px solid var(--border); border-radius: 20px; font-size: 11px; padding: 1px 7px; font-weight: 500; }
+.nav-tab.active .count-pill { background: var(--accent-bg); border-color: var(--accent-border); color: var(--accent); }
+
+#body { display: flex; flex: 1; overflow: hidden; }
+
+/* ── sidebar ── */
+#sidebar {
+  width: 340px; flex-shrink: 0; background: var(--surface);
+  border-right: 1px solid var(--border); display: flex; flex-direction: column;
+  overflow: hidden;
+}
+.sidebar-toolbar { padding: 10px 12px; border-bottom: 1px solid var(--border); display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.sidebar-list { flex: 1; overflow-y: auto; }
+
+/* ── map ── */
+#map-wrap { flex: 1; position: relative; }
+#map { width: 100%; height: 100%; }
+
+/* ── pipeline rows ── */
+.pipe-row {
+  padding: 10px 14px; border-bottom: 0.5px solid var(--border);
+  display: flex; align-items: center; gap: 10px; cursor: pointer;
+  transition: background 0.1s;
+}
+.pipe-row:hover { background: var(--surface-2); }
+.pipe-row.selected { background: var(--accent-bg); }
+.pipe-color { width: 10px; height: 10px; border-radius: 50%; flex-shrink: 0; }
+.pipe-meta { flex: 1; min-width: 0; }
+.pipe-id { font-family: var(--font-mono); font-size: 11px; color: var(--text-muted); }
+.pipe-name { font-size: 13px; font-weight: 500; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+.pipe-detail { font-size: 12px; color: var(--text-muted); margin-top: 1px; }
+.pipe-actions { display: flex; gap: 4px; flex-shrink: 0; }
+
+.joint-row { padding: 10px 14px; border-bottom: 0.5px solid var(--border); display: flex; align-items: center; gap: 10px; }
+.joint-meta { flex: 1; min-width: 0; }
+.joint-id { font-family: var(--font-mono); font-size: 11px; color: var(--text-muted); }
+.joint-links { font-size: 12px; color: var(--text-muted); margin-top: 2px; }
+
+.empty-state { padding: 3rem 1.5rem; text-align: center; color: var(--text-muted); }
+.empty-state p { font-size: 13px; margin-top: 6px; line-height: 1.5; }
+
+/* ── drawing banner ── */
+#draw-banner {
+  display: none; position: absolute; top: 12px; left: 50%; transform: translateX(-50%);
+  background: var(--text); color: #fff; border-radius: var(--radius);
+  padding: 8px 16px; font-size: 13px; z-index: 500; white-space: nowrap;
+  pointer-events: none; gap: 8px; align-items: center;
+}
+#draw-banner.visible { display: flex; }
+
+/* ── map controls ── */
+.map-btn-group {
+  position: absolute; top: 12px; right: 12px; z-index: 400;
+  display: flex; flex-direction: column; gap: 4px;
+}
+
+/* ── buttons ── */
+button { font-family: var(--font); font-size: 13px; border-radius: var(--radius); padding: 6px 12px; cursor: pointer; border: 1px solid var(--border-strong); background: var(--surface); color: var(--text); display: flex; align-items: center; gap: 5px; white-space: nowrap; transition: background 0.12s; }
+button:hover { background: var(--surface-2); border-color: var(--accent); }
+button.primary { background: var(--accent); color: #fff; border-color: var(--accent); }
+button.primary:hover { background: #185fa5; }
+button.danger { background: var(--danger-bg); color: var(--danger); border-color: #f09595; }
+button.danger:hover { background: #f7c1c1; }
+button.sm { padding: 3px 9px; font-size: 12px; }
+button.icon-btn { padding: 5px 7px; }
+button.draw-btn { background: var(--surface); box-shadow: 0 1px 4px rgba(0,0,0,0.15); border-color: var(--border); }
+button.draw-btn.active { background: var(--accent-bg); border-color: var(--accent); color: var(--accent); }
+
+/* ── modals ── */
+.modal-overlay { display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.35); z-index: 800; align-items: center; justify-content: center; }
+.modal-overlay.open { display: flex; }
+.modal { background: var(--surface); border-radius: 12px; border: 1px solid var(--border); width: 100%; max-width: 500px; margin: 1rem; }
+.modal-header { padding: 1.1rem 1.4rem 0.9rem; border-bottom: 1px solid var(--border); display: flex; align-items: center; justify-content: space-between; }
+.modal-header h2 { font-size: 15px; font-weight: 500; }
+.modal-body { padding: 1.1rem 1.4rem; display: flex; flex-direction: column; gap: 12px; }
+.modal-footer { padding: 0.9rem 1.4rem; border-top: 1px solid var(--border); display: flex; justify-content: flex-end; gap: 8px; }
+.field { display: flex; flex-direction: column; gap: 4px; }
+.field label { font-size: 12px; font-weight: 500; color: var(--text-muted); }
+.field-row { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+input[type="text"], input[type="number"], select { font-family: var(--font); font-size: 13px; border: 1px solid var(--border); border-radius: var(--radius); padding: 6px 10px; background: var(--surface); color: var(--text); outline: none; width: 100%; transition: border-color 0.15s; }
+input:focus, select:focus { border-color: var(--accent); box-shadow: 0 0 0 3px rgba(29,111,164,0.1); }
+
+/* ── badges ── */
+.badge { display: inline-block; font-size: 11px; font-weight: 500; padding: 2px 8px; border-radius: 20px; }
+.badge-active { background: var(--success-bg); color: var(--success); }
+.badge-inactive { background: #f1efe8; color: #5f5e5a; }
+.badge-construction { background: var(--warning-bg); color: var(--warning); }
+.badge-abandoned { background: var(--danger-bg); color: var(--danger); }
+.badge-welded { background: var(--accent-bg); color: var(--accent); }
+.badge-flanged { background: #fbeaf0; color: #993556; }
+.badge-compression { background: #f0ece8; color: #71421a; }
+.badge-threaded { background: var(--success-bg); color: var(--success); }
+.badge-mechanical { background: #ede9fc; color: #534ab7; }
+
+/* ── toast ── */
+.toast { position: fixed; bottom: 1.5rem; right: 1.5rem; background: var(--text); color: #fff; padding: 9px 15px; border-radius: var(--radius); font-size: 13px; z-index: 999; opacity: 0; transform: translateY(6px); transition: opacity 0.2s, transform 0.2s; pointer-events: none; }
+.toast.show { opacity: 1; transform: translateY(0); }
+
+/* ── color swatches for pipeline picker ── */
+.color-row { display: flex; gap: 8px; flex-wrap: wrap; }
+.color-swatch { width: 24px; height: 24px; border-radius: 50%; cursor: pointer; border: 2px solid transparent; transition: transform 0.1s; }
+.color-swatch:hover { transform: scale(1.15); }
+.color-swatch.selected { border-color: var(--text); }
+
+/* ── leaflet draw override ── */
+.leaflet-draw-toolbar { display: none !important; }
+.leaflet-draw-section { display: none !important; }
+</style>
+</head>
+<body>
+<div id="app">
+
+<header>
+  <div class="logo">
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">
+      <path d="M3 6h18M3 12h18M3 18h18"/><circle cx="7" cy="6" r="2" fill="currentColor" stroke="none"/><circle cx="17" cy="12" r="2" fill="currentColor" stroke="none"/><circle cx="7" cy="18" r="2" fill="currentColor" stroke="none"/>
+    </svg>
+    Pipeline Database
+  </div>
+  <span class="client-badge" id="client-label">No client set</span>
+  <div class="header-right">
+    <button onclick="openClientModal()">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+      Client
+    </button>
+    <button onclick="exportGeoJSON()">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+      Export GeoJSON
+    </button>
+  </div>
+</header>
+
+<nav>
+  <button class="nav-tab active" onclick="switchTab('pipelines', this)">
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/></svg>
+    Pipelines
+    <span class="count-pill" id="pipeline-count">0</span>
+  </button>
+  <button class="nav-tab" onclick="switchTab('joints', this)">
+    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M12 2v4m0 12v4M2 12h4m12 0h4"/></svg>
+    Joints
+    <span class="count-pill" id="joint-count">0</span>
+  </button>
+</nav>
+
+<div id="body">
+
+  <!-- Sidebar -->
+  <div id="sidebar">
+
+    <!-- Pipelines panel -->
+    <div id="panel-pipelines" class="panel" style="display:flex;flex-direction:column;height:100%">
+      <div class="sidebar-toolbar">
+        <input type="text" placeholder="Search…" oninput="filterPipelines(this.value)" style="flex:1;font-size:13px;" />
+        <button class="primary" onclick="openPipelineModal()">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+          Add
+        </button>
+      </div>
+      <div class="sidebar-list" id="pipeline-list"></div>
+    </div>
+
+    <!-- Joints panel -->
+    <div id="panel-joints" class="panel" style="display:none;flex-direction:column;height:100%">
+      <div class="sidebar-toolbar">
+        <input type="text" placeholder="Search…" oninput="filterJoints(this.value)" style="flex:1;font-size:13px;" />
+        <button class="primary" onclick="openJointModal()">
+          <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+          Add
+        </button>
+      </div>
+      <div class="sidebar-list" id="joint-list"></div>
+    </div>
+
+  </div>
+
+  <!-- Map -->
+  <div id="map-wrap">
+    <div id="map"></div>
+
+    <div id="draw-banner">
+      <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 19l7-7 3 3-7 7-3-3z"/><path d="M18 13l-1.5-7.5L2 2l3.5 14.5L13 18l5-5z"/><path d="M2 2l7.586 7.586"/><circle cx="11" cy="11" r="2"/></svg>
+      <span id="draw-banner-text">Click to add vertices — double-click to finish</span>
+    </div>
+
+    <div class="map-btn-group">
+      <button class="draw-btn" id="draw-toggle-btn" onclick="toggleDraw()" title="Draw pipeline on map">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 19l7-7 3 3-7 7-3-3z"/><path d="M18 13l-1.5-7.5L2 2l3.5 14.5L13 18l5-5z"/></svg>
+        Draw pipeline
+      </button>
+      <button class="draw-btn" onclick="fitAll()" title="Zoom to all features">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 3h6v6M9 21H3v-6M21 3l-7 7M3 21l7-7"/></svg>
+        Fit all
+      </button>
+    </div>
+  </div>
+
+</div>
+</div>
+
+<!-- Pipeline Modal -->
+<div class="modal-overlay" id="pipeline-modal">
+  <div class="modal">
+    <div class="modal-header">
+      <h2 id="pm-title">Add pipeline</h2>
+      <button class="icon-btn" onclick="closeModal('pipeline-modal')">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+      </button>
+    </div>
+    <div class="modal-body">
+      <input type="hidden" id="pm-edit-id"/>
+      <div class="field-row">
+        <div class="field">
+          <label>Pipeline ID</label>
+          <input type="text" id="pm-id" placeholder="PL-001"/>
+        </div>
+        <div class="field">
+          <label>Status</label>
+          <select id="pm-status">
+            <option>Active</option><option>Inactive</option>
+            <option>Under Construction</option><option>Abandoned</option>
+          </select>
+        </div>
+      </div>
+      <div class="field">
+        <label>Name</label>
+        <input type="text" id="pm-name" placeholder="e.g. North trunk line"/>
+      </div>
+      <div class="field-row">
+        <div class="field">
+          <label>Diameter (inches)</label>
+          <input type="number" id="pm-diameter" min="0.5" step="0.5" placeholder="6"/>
+        </div>
+        <div class="field">
+          <label>Material</label>
+          <select id="pm-material">
+            <option>Steel</option><option>HDPE</option><option>PVC</option>
+            <option>Cast Iron</option><option>Ductile Iron</option>
+            <option>Copper</option><option>Fiberglass</option><option>Other</option>
+          </select>
+        </div>
+      </div>
+      <div class="field">
+        <label>Map color</label>
+        <div class="color-row" id="color-picker"></div>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button onclick="closeModal('pipeline-modal')">Cancel</button>
+      <button class="primary" onclick="savePipeline()">Save pipeline</button>
+    </div>
+  </div>
+</div>
+
+<!-- Joint Modal -->
+<div class="modal-overlay" id="joint-modal">
+  <div class="modal">
+    <div class="modal-header">
+      <h2 id="jm-title">Add joint</h2>
+      <button class="icon-btn" onclick="closeModal('joint-modal')">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+      </button>
+    </div>
+    <div class="modal-body">
+      <input type="hidden" id="jm-edit-id"/>
+      <div class="field-row">
+        <div class="field">
+          <label>Joint ID</label>
+          <input type="text" id="jm-id" placeholder="JT-001"/>
+        </div>
+        <div class="field">
+          <label>Joint type</label>
+          <select id="jm-type">
+            <option>Welded</option><option>Flanged</option><option>Compression</option>
+            <option>Threaded</option><option>Mechanical</option>
+          </select>
+        </div>
+      </div>
+      <div class="field-row">
+        <div class="field">
+          <label>Pipeline A</label>
+          <select id="jm-pipe-a"><option value="">— select —</option></select>
+        </div>
+        <div class="field">
+          <label>Pipeline B</label>
+          <select id="jm-pipe-b"><option value="">— select —</option></select>
+        </div>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button onclick="closeModal('joint-modal')">Cancel</button>
+      <button class="primary" onclick="saveJoint()">Save joint</button>
+    </div>
+  </div>
+</div>
+
+<!-- Client Modal -->
+<div class="modal-overlay" id="client-modal">
+  <div class="modal">
+    <div class="modal-header">
+      <h2>Set client name</h2>
+      <button class="icon-btn" onclick="closeModal('client-modal')">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg>
+      </button>
+    </div>
+    <div class="modal-body">
+      <div class="field">
+        <label>Client name</label>
+        <input type="text" id="cm-name" placeholder="e.g. Permian Basin Energy Co."/>
+      </div>
+    </div>
+    <div class="modal-footer">
+      <button onclick="closeModal('client-modal')">Cancel</button>
+      <button class="primary" onclick="saveClient()">Save</button>
+    </div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet.draw/1.0.4/leaflet.draw.min.js"></script>
+<script>
+// ─── State ───────────────────────────────────────────────────────────────────
+const STORAGE_KEY = 'pipelinedb_v2';
+let db = { client: '', pipelines: [], joints: [] };
+
+let pipelineFilter = '';
+let jointFilter = '';
+let selectedPipelineId = null;
+let drawingForId = null;   // pipeline id we're drawing for
+let drawHandler = null;
+let mapLayers = {};        // id -> L.polyline
+
+const COLORS = ['#1d6fa4','#e05c2a','#3b6d11','#9b3fba','#ba7517','#993556','#0e8585','#555'];
+
+// ─── Persistence ─────────────────────────────────────────────────────────────
+function load() {
+  try { const r = localStorage.getItem(STORAGE_KEY); if (r) db = JSON.parse(r); } catch(e){}
+}
+function save() { localStorage.setItem(STORAGE_KEY, JSON.stringify(db)); }
+
+// ─── Map setup ───────────────────────────────────────────────────────────────
+const map = L.map('map', { zoomControl: true }).setView([31.5, -103.5], 8);
+
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+  attribution: '© <a href="https://openstreetmap.org/copyright">OpenStreetMap</a> contributors',
+  maxZoom: 19
+}).addTo(map);
+
+const drawnItems = new L.FeatureGroup().addTo(map);
+
+// We use Leaflet.draw's Polyline handler directly
+function startDraw(pipelineId) {
+  if (drawHandler) { drawHandler.disable(); drawHandler = null; }
+  drawingForId = pipelineId;
+  const p = db.pipelines.find(x => x.id === pipelineId);
+  const color = p ? p.color : '#1d6fa4';
+
+  drawHandler = new L.Draw.Polyline(map, {
+    shapeOptions: { color, weight: 4, opacity: 0.9 },
+    metric: false,
+    feet: false,
+    showLength: false,
+    allowIntersection: true
+  });
+  drawHandler.enable();
+
+  document.getElementById('draw-banner-text').textContent =
+    `Drawing: ${p ? p.pipelineId : ''} — click to add vertices, double-click to finish`;
+  document.getElementById('draw-banner').classList.add('visible');
+  document.getElementById('draw-toggle-btn').classList.add('active');
+}
+
+function stopDraw() {
+  if (drawHandler) { drawHandler.disable(); drawHandler = null; }
+  drawingForId = null;
+  document.getElementById('draw-banner').classList.remove('visible');
+  document.getElementById('draw-toggle-btn').classList.remove('active');
+}
+
+// "Draw pipeline" button — draws for selected pipeline or first undrawn
+function toggleDraw() {
+  if (drawHandler) { stopDraw(); return; }
+  const target = selectedPipelineId
+    ? db.pipelines.find(p => p.id === selectedPipelineId)
+    : db.pipelines.find(p => !p.geometry || p.geometry.length === 0);
+  if (!target) { toast('Select a pipeline first'); return; }
+  startDraw(target.id);
+}
+
+map.on(L.Draw.Event.CREATED, function(e) {
+  const latlngs = e.layer.getLatLngs();
+  if (!drawingForId) { stopDraw(); return; }
+  const p = db.pipelines.find(x => x.id === drawingForId);
+  if (p) {
+    p.geometry = latlngs.map(ll => [ll.lat, ll.lng]);
+    save();
+    renderMapLayer(p);
+    renderPipelines();
+  }
+  stopDraw();
+  toast('Pipeline geometry saved');
+});
+
+map.on(L.Draw.Event.DRAWSTOP, function() {
+  // fired if user presses Escape
+  stopDraw();
+});
+
+function renderMapLayer(p) {
+  if (mapLayers[p.id]) { map.removeLayer(mapLayers[p.id]); delete mapLayers[p.id]; }
+  if (!p.geometry || p.geometry.length < 2) return;
+  const line = L.polyline(p.geometry, {
+    color: p.color || '#1d6fa4',
+    weight: 4,
+    opacity: 0.85
+  }).addTo(map);
+  line.bindTooltip(`<b>${esc(p.pipelineId)}</b><br>${esc(p.name)}<br>${p.diameter}" ${esc(p.material)}`, { sticky: true });
+  line.on('click', () => {
+    selectPipeline(p.id);
+    document.querySelectorAll('#panel-pipelines .pipe-row').forEach(r => r.classList.remove('selected'));
+    const row = document.querySelector(`.pipe-row[data-id="${p.id}"]`);
+    if (row) { row.classList.add('selected'); row.scrollIntoView({ block: 'nearest' }); }
+  });
+  mapLayers[p.id] = line;
+}
+
+function fitAll() {
+  const layers = Object.values(mapLayers);
+  if (layers.length === 0) { toast('No geometries to fit'); return; }
+  const group = L.featureGroup(layers);
+  map.fitBounds(group.getBounds().pad(0.15));
+}
+
+function rebuildMap() {
+  Object.values(mapLayers).forEach(l => map.removeLayer(l));
+  mapLayers = {};
+  db.pipelines.forEach(renderMapLayer);
+}
+
+function selectPipeline(id) {
+  selectedPipelineId = id;
+  // Bold the selected line
+  Object.entries(mapLayers).forEach(([pid, layer]) => {
+    layer.setStyle({ weight: pid === id ? 6 : 4, opacity: pid === id ? 1 : 0.85 });
+  });
+}
+
+// ─── UI tabs ─────────────────────────────────────────────────────────────────
+function switchTab(tab, btn) {
+  document.querySelectorAll('.panel').forEach(p => p.style.display = 'none');
+  document.querySelectorAll('.nav-tab').forEach(b => b.classList.remove('active'));
+  const panel = document.getElementById('panel-' + tab);
+  panel.style.display = 'flex';
+  btn.classList.add('active');
+}
+
+function openModal(id) { document.getElementById(id).classList.add('open'); }
+function closeModal(id) { document.getElementById(id).classList.remove('open'); }
+document.querySelectorAll('.modal-overlay').forEach(m => {
+  m.addEventListener('click', e => { if (e.target === m) m.classList.remove('open'); });
+});
+
+function toast(msg) {
+  const el = document.getElementById('toast');
+  el.textContent = msg;
+  el.classList.add('show');
+  setTimeout(() => el.classList.remove('show'), 2500);
+}
+
+// ─── Color picker ─────────────────────────────────────────────────────────────
+let selectedColor = COLORS[0];
+function buildColorPicker(current) {
+  selectedColor = current || COLORS[0];
+  document.getElementById('color-picker').innerHTML = COLORS.map(c => `
+    <div class="color-swatch${c === selectedColor ? ' selected' : ''}"
+      style="background:${c}"
+      onclick="pickColor('${c}')" title="${c}"></div>
+  `).join('');
+}
+function pickColor(c) {
+  selectedColor = c;
+  document.querySelectorAll('.color-swatch').forEach(s => {
+    s.classList.toggle('selected', s.style.background === c || s.style.backgroundColor === c);
+  });
+}
+
+// ─── Client ───────────────────────────────────────────────────────────────────
+function openClientModal() {
+  document.getElementById('cm-name').value = db.client;
+  openModal('client-modal');
+}
+function saveClient() {
+  db.client = document.getElementById('cm-name').value.trim();
+  save(); renderClientLabel(); closeModal('client-modal'); toast('Client updated');
+}
+function renderClientLabel() {
+  document.getElementById('client-label').textContent = db.client || 'No client set';
+}
+
+// ─── Pipelines ───────────────────────────────────────────────────────────────
+function openPipelineModal(editId) {
+  document.getElementById('pm-title').textContent = editId ? 'Edit pipeline' : 'Add pipeline';
+  document.getElementById('pm-edit-id').value = editId || '';
+  if (editId) {
+    const p = db.pipelines.find(x => x.id === editId);
+    document.getElementById('pm-id').value = p.pipelineId;
+    document.getElementById('pm-name').value = p.name;
+    document.getElementById('pm-diameter').value = p.diameter;
+    document.getElementById('pm-material').value = p.material;
+    document.getElementById('pm-status').value = p.status;
+    buildColorPicker(p.color);
+  } else {
+    document.getElementById('pm-id').value = nextId('PL', db.pipelines, 'pipelineId');
+    document.getElementById('pm-name').value = '';
+    document.getElementById('pm-diameter').value = '';
+    document.getElementById('pm-material').value = 'Steel';
+    document.getElementById('pm-status').value = 'Active';
+    buildColorPicker(COLORS[db.pipelines.length % COLORS.length]);
+  }
+  openModal('pipeline-modal');
+}
+
+function savePipeline() {
+  const pipelineId = document.getElementById('pm-id').value.trim();
+  const name = document.getElementById('pm-name').value.trim();
+  const diameter = parseFloat(document.getElementById('pm-diameter').value);
+  const material = document.getElementById('pm-material').value;
+  const status = document.getElementById('pm-status').value;
+  const editId = document.getElementById('pm-edit-id').value;
+  const color = selectedColor;
+
+  if (!pipelineId || !name || isNaN(diameter)) { toast('Fill in all required fields'); return; }
+  if (db.pipelines.find(p => p.pipelineId === pipelineId && p.id !== editId)) { toast('Pipeline ID already exists'); return; }
+
+  if (editId) {
+    const p = db.pipelines.find(x => x.id === editId);
+    Object.assign(p, { pipelineId, name, diameter, material, status, color });
+    // update map line color
+    if (mapLayers[editId]) mapLayers[editId].setStyle({ color });
+  } else {
+    db.pipelines.push({ id: uid(), pipelineId, name, diameter, material, status, color, geometry: [] });
+  }
+  save(); renderPipelines(); renderJoints(); closeModal('pipeline-modal');
+  toast(editId ? 'Pipeline updated' : 'Pipeline added — click Draw to place it on the map');
+}
+
+function deletePipeline(id) {
+  const linked = db.joints.filter(j => j.pipelineA === id || j.pipelineB === id);
+  if (linked.length && !confirm(`This pipeline has ${linked.length} joint(s). Delete anyway?`)) return;
+  linked.forEach(j => { if (j.pipelineA === id) j.pipelineA = ''; if (j.pipelineB === id) j.pipelineB = ''; });
+  db.pipelines = db.pipelines.filter(p => p.id !== id);
+  if (mapLayers[id]) { map.removeLayer(mapLayers[id]); delete mapLayers[id]; }
+  if (selectedPipelineId === id) selectedPipelineId = null;
+  save(); renderPipelines(); renderJoints(); toast('Pipeline deleted');
+}
+
+function clearGeometry(id) {
+  const p = db.pipelines.find(x => x.id === id);
+  if (!p) return;
+  if (!confirm('Clear the drawn geometry for this pipeline?')) return;
+  p.geometry = [];
+  if (mapLayers[id]) { map.removeLayer(mapLayers[id]); delete mapLayers[id]; }
+  save(); renderPipelines(); toast('Geometry cleared');
+}
+
+function filterPipelines(text) { pipelineFilter = text.toLowerCase(); renderPipelines(); }
+
+function renderPipelines() {
+  const jointCounts = {};
+  db.joints.forEach(j => {
+    if (j.pipelineA) jointCounts[j.pipelineA] = (jointCounts[j.pipelineA] || 0) + 1;
+    if (j.pipelineB) jointCounts[j.pipelineB] = (jointCounts[j.pipelineB] || 0) + 1;
+  });
+
+  let list = db.pipelines.filter(p =>
+    !pipelineFilter || `${p.pipelineId} ${p.name} ${p.material}`.toLowerCase().includes(pipelineFilter)
+  );
+
+  document.getElementById('pipeline-count').textContent = db.pipelines.length;
+  const el = document.getElementById('pipeline-list');
+
+  if (list.length === 0) {
+    el.innerHTML = `<div class="empty-state"><p>${db.pipelines.length === 0 ? 'Add your first pipeline, then draw it on the map.' : 'No results.'}</p></div>`;
+    return;
+  }
+
+  el.innerHTML = list.map(p => {
+    const hasGeom = p.geometry && p.geometry.length >= 2;
+    const jc = jointCounts[p.id] || 0;
+    return `
+      <div class="pipe-row${selectedPipelineId === p.id ? ' selected' : ''}" data-id="${p.id}"
+           onclick="selectPipelineRow('${p.id}')">
+        <div class="pipe-color" style="background:${p.color || '#aaa'}"></div>
+        <div class="pipe-meta">
+          <div class="pipe-id">${esc(p.pipelineId)}</div>
+          <div class="pipe-name">${esc(p.name)}</div>
+          <div class="pipe-detail">${p.diameter}" · ${esc(p.material)} · <span class="badge ${statusClass(p.status)}">${esc(p.status)}</span></div>
+          <div class="pipe-detail" style="margin-top:3px">
+            ${hasGeom ? `<span style="color:var(--success)">✓ mapped</span>` : `<span style="color:var(--warning)">no geometry</span>`}
+            ${jc > 0 ? ` · ${jc} joint${jc>1?'s':''}` : ''}
+          </div>
+        </div>
+        <div class="pipe-actions">
+          <button class="sm" onclick="event.stopPropagation();startDraw('${p.id}')" title="Draw on map">
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2"><path d="M12 19l7-7 3 3-7 7-3-3z"/><path d="M18 13l-1.5-7.5L2 2l3.5 14.5L13 18l5-5z"/></svg>
+            Draw
+          </button>
+          ${hasGeom ? `<button class="sm" onclick="event.stopPropagation();zoomTo('${p.id}')" title="Zoom to">
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+          </button>
+          <button class="sm danger" onclick="event.stopPropagation();clearGeometry('${p.id}')" title="Clear geometry">✕</button>` : ''}
+          <button class="sm" onclick="event.stopPropagation();openPipelineModal('${p.id}')">Edit</button>
+          <button class="sm danger" onclick="event.stopPropagation();deletePipeline('${p.id}')">
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/><path d="M10 11v6M14 11v6"/></svg>
+          </button>
+        </div>
+      </div>
+    `;
+  }).join('');
+}
+
+function selectPipelineRow(id) {
+  selectedPipelineId = id;
+  selectPipeline(id);
+  renderPipelines();
+  const p = db.pipelines.find(x => x.id === id);
+  if (p && p.geometry && p.geometry.length >= 2) {
+    map.fitBounds(L.polyline(p.geometry).getBounds().pad(0.2));
+  }
+}
+
+function zoomTo(id) {
+  const p = db.pipelines.find(x => x.id === id);
+  if (p && p.geometry && p.geometry.length >= 2) {
+    map.fitBounds(L.polyline(p.geometry).getBounds().pad(0.2));
+  }
+}
+
+function statusClass(s) {
+  return { Active:'badge-active', Inactive:'badge-inactive', 'Under Construction':'badge-construction', Abandoned:'badge-abandoned' }[s] || '';
+}
+
+// ─── Joints ───────────────────────────────────────────────────────────────────
+function openJointModal(editId) {
+  document.getElementById('jm-title').textContent = editId ? 'Edit joint' : 'Add joint';
+  document.getElementById('jm-edit-id').value = editId || '';
+  const opts = db.pipelines.map(p => `<option value="${p.id}">${esc(p.pipelineId)} — ${esc(p.name)}</option>`).join('');
+  const blank = '<option value="">— select —</option>';
+  document.getElementById('jm-pipe-a').innerHTML = blank + opts;
+  document.getElementById('jm-pipe-b').innerHTML = blank + opts;
+  if (editId) {
+    const j = db.joints.find(x => x.id === editId);
+    document.getElementById('jm-id').value = j.jointId;
+    document.getElementById('jm-type').value = j.type;
+    document.getElementById('jm-pipe-a').value = j.pipelineA;
+    document.getElementById('jm-pipe-b').value = j.pipelineB;
+  } else {
+    document.getElementById('jm-id').value = nextId('JT', db.joints, 'jointId');
+    document.getElementById('jm-type').value = 'Welded';
+  }
+  openModal('joint-modal');
+}
+
+function saveJoint() {
+  const jointId = document.getElementById('jm-id').value.trim();
+  const type = document.getElementById('jm-type').value;
+  const pipelineA = document.getElementById('jm-pipe-a').value;
+  const pipelineB = document.getElementById('jm-pipe-b').value;
+  const editId = document.getElementById('jm-edit-id').value;
+  if (!jointId || !pipelineA || !pipelineB) { toast('Fill in all required fields'); return; }
+  if (pipelineA === pipelineB) { toast('Pipeline A and B must be different'); return; }
+  if (db.joints.find(j => j.jointId === jointId && j.id !== editId)) { toast('Joint ID already exists'); return; }
+  if (editId) {
+    Object.assign(db.joints.find(x => x.id === editId), { jointId, type, pipelineA, pipelineB });
+  } else {
+    db.joints.push({ id: uid(), jointId, type, pipelineA, pipelineB });
+  }
+  save(); renderPipelines(); renderJoints(); closeModal('joint-modal');
+  toast(editId ? 'Joint updated' : 'Joint added');
+}
+
+function deleteJoint(id) {
+  db.joints = db.joints.filter(j => j.id !== id);
+  save(); renderPipelines(); renderJoints(); toast('Joint deleted');
+}
+
+function filterJoints(text) { jointFilter = text.toLowerCase(); renderJoints(); }
+
+function renderJoints() {
+  let list = db.joints.filter(j => {
+    if (!jointFilter) return true;
+    const pa = db.pipelines.find(p => p.id === j.pipelineA);
+    const pb = db.pipelines.find(p => p.id === j.pipelineB);
+    return `${j.jointId} ${j.type} ${pa?.pipelineId||''} ${pa?.name||''} ${pb?.pipelineId||''} ${pb?.name||''}`.toLowerCase().includes(jointFilter);
+  });
+
+  document.getElementById('joint-count').textContent = db.joints.length;
+  const el = document.getElementById('joint-list');
+
+  if (list.length === 0) {
+    el.innerHTML = `<div class="empty-state"><p>${db.joints.length === 0 ? 'Add joints to connect adjacent pipelines.' : 'No results.'}</p></div>`;
+    return;
+  }
+
+  el.innerHTML = list.map(j => {
+    const pa = db.pipelines.find(p => p.id === j.pipelineA);
+    const pb = db.pipelines.find(p => p.id === j.pipelineB);
+    return `
+      <div class="joint-row">
+        <div class="joint-meta">
+          <div class="joint-id">${esc(j.jointId)}</div>
+          <div style="font-size:13px;font-weight:500;margin-top:1px">
+            <span class="badge ${typeClass(j.type)}">${esc(j.type)}</span>
+          </div>
+          <div class="joint-links">
+            ${pa ? `<span style="display:inline-block;width:9px;height:9px;border-radius:50%;background:${pa.color||'#aaa'};margin-right:4px;vertical-align:middle"></span>${esc(pa.pipelineId)}` : '<span style="color:var(--danger)">missing</span>'}
+            &nbsp;↔&nbsp;
+            ${pb ? `<span style="display:inline-block;width:9px;height:9px;border-radius:50%;background:${pb.color||'#aaa'};margin-right:4px;vertical-align:middle"></span>${esc(pb.pipelineId)}` : '<span style="color:var(--danger)">missing</span>'}
+          </div>
+        </div>
+        <div class="pipe-actions">
+          <button class="sm" onclick="openJointModal('${j.id}')">Edit</button>
+          <button class="sm danger" onclick="deleteJoint('${j.id}')">
+            <svg width="11" height="11" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-1 14a2 2 0 0 1-2 2H8a2 2 0 0 1-2-2L5 6"/></svg>
+          </button>
+        </div>
+      </div>
+    `;
+  }).join('');
+}
+
+function typeClass(t) {
+  return { Welded:'badge-welded', Flanged:'badge-flanged', Compression:'badge-compression', Threaded:'badge-threaded', Mechanical:'badge-mechanical' }[t] || '';
+}
+
+// ─── GeoJSON export ───────────────────────────────────────────────────────────
+function exportGeoJSON() {
+  const features = [];
+
+  db.pipelines.forEach(p => {
+    const geom = (p.geometry && p.geometry.length >= 2)
+      ? { type: 'LineString', coordinates: p.geometry.map(ll => [ll[1], ll[0]]) }
+      : null;
+    features.push({
+      type: 'Feature', geometry: geom,
+      properties: { layer: 'pipeline', pipeline_id: p.pipelineId, name: p.name, diameter_in: p.diameter, material: p.material, status: p.status }
+    });
+  });
+
+  db.joints.forEach(j => {
+    const pa = db.pipelines.find(p => p.id === j.pipelineA);
+    const pb = db.pipelines.find(p => p.id === j.pipelineB);
+    features.push({
+      type: 'Feature', geometry: null,
+      properties: { layer: 'joint', joint_id: j.jointId, joint_type: j.type, pipeline_a_id: pa?.pipelineId||'', pipeline_a_name: pa?.name||'', pipeline_b_id: pb?.pipelineId||'', pipeline_b_name: pb?.name||'' }
+    });
+  });
+
+  const geojson = {
+    type: 'FeatureCollection',
+    name: db.client || 'Pipeline Database',
+    crs: { type: 'name', properties: { name: 'urn:ogc:def:crs:OGC:1.3:CRS84' } },
+    metadata: { client: db.client, exported: new Date().toISOString(), pipeline_count: db.pipelines.length, joint_count: db.joints.length },
+    features
+  };
+
+  const blob = new Blob([JSON.stringify(geojson, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  const slug = (db.client || 'pipeline-db').toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g,'');
+  a.href = url; a.download = `${slug}-${new Date().toISOString().slice(0,10)}.geojson`;
+  a.click(); URL.revokeObjectURL(url);
+  toast('GeoJSON exported');
+}
+
+// ─── Helpers ──────────────────────────────────────────────────────────────────
+function uid() { return Math.random().toString(36).slice(2,10); }
+function esc(s) { return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+function nextId(prefix, arr, field) {
+  const nums = arr.map(x => { const m = String(x[field]||'').match(/-(\d+)$/); return m ? parseInt(m[1]) : 0; });
+  return `${prefix}-${String(Math.max(0,...nums)+1).padStart(3,'0')}`;
+}
+
+// ─── Init ─────────────────────────────────────────────────────────────────────
+load();
+renderClientLabel();
+rebuildMap();
+renderPipelines();
+renderJoints();
+</script>
+</body>
+</html>
